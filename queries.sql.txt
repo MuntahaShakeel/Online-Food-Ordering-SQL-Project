@@ -1,0 +1,308 @@
+ONLINE FOOD DELIVERY DATABSE
+
+
+--Users Table (For roles: customer, admin, delivery)
+CREATE TABLE Users (
+    UserID INT PRIMARY KEY IDENTITY,
+    FullName NVARCHAR(100),
+    Email NVARCHAR(100) UNIQUE NOT NULL,
+    PasswordHash NVARCHAR(255) NOT NULL,
+    Role NVARCHAR(20) CHECK (Role IN ('customer', 'admin', 'delivery')),
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+
+--MenuItems Table
+CREATE TABLE MenuItems (
+    ItemID INT PRIMARY KEY IDENTITY,
+    Name NVARCHAR(100),
+    Description NVARCHAR(255),
+    Price DECIMAL(10, 2),
+    Category NVARCHAR(50),
+    IsAvailable BIT DEFAULT 1
+);
+
+
+--Orders Table
+CREATE TABLE Orders (
+    OrderID INT PRIMARY KEY IDENTITY,
+    UserID INT FOREIGN KEY REFERENCES Users(UserID),
+    OrderStatus NVARCHAR(20) CHECK (OrderStatus IN ('pending', 'confirmed', 'delivered', 'cancelled')),
+    OrderTime DATETIME DEFAULT GETDATE(),
+    TotalAmount DECIMAL(10, 2)
+);
+
+
+
+--OrderItems Table (One order can have many items)
+CREATE TABLE OrderItems (
+    OrderItemID INT PRIMARY KEY IDENTITY,
+    OrderID INT FOREIGN KEY REFERENCES Orders(OrderID),
+    ItemID INT,
+    Quantity INT,
+    PriceAtPurchase DECIMAL(10,2),
+    FOREIGN KEY (ItemID) REFERENCES MenuItems(ItemID) ON DELETE CASCADE
+);
+
+
+--DeliveryDetails Table
+CREATE TABLE DeliveryDetails (
+    DeliveryID INT PRIMARY KEY IDENTITY,
+    OrderID INT FOREIGN KEY REFERENCES Orders(OrderID),
+    DeliveryAddress NVARCHAR(255),
+    DeliveryTime DATETIME,
+    DeliveryStatus NVARCHAR(20) CHECK (DeliveryStatus IN ('pending', 'out for delivery', 'delivered'))
+);
+
+
+
+
+--Indexes
+CREATE INDEX idx_OrderStatus ON Orders(OrderStatus);
+CREATE INDEX idx_Email ON Users(Email);
+CREATE INDEX idx_MenuCategory ON MenuItems(Category);
+
+
+
+--Triggers
+--Automatically set delivery record when new order is placed
+CREATE TRIGGER trg_CreateDeliveryEntry
+ON Orders
+AFTER INSERT
+AS
+BEGIN
+  INSERT INTO DeliveryDetails (OrderID, DeliveryAddress, DeliveryStatus)
+  SELECT i.OrderID, 'Address Pending', 'pending'
+  FROM inserted i;
+END;
+
+
+
+
+--You can insert this much once manually or via INSERT statements so your frontend doesn’t break when testing:
+--Users
+INSERT INTO Users (FullName, Email, PasswordHash, Role)
+VALUES ('Admin User', 'admin@food.com', 'hashedpassword', 'admin');
+
+--Menu Items
+INSERT INTO MenuItems (Name, Description, Price, Category)
+VALUES 
+('Zinger Burger', 'Crispy chicken burger', 450.00, 'Fast Food'),
+('Chicken Biryani', 'Spicy rice and chicken', 350.00, 'Desi'),
+('Pepsi', 'Cold drink', 80.00, 'Beverages');
+
+
+
+
+
+
+-- USER MODULE
+--1. Register New User
+CREATE PROCEDURE RegisterUser
+  @FullName NVARCHAR(100),
+  @Email NVARCHAR(100),
+  @PasswordHash NVARCHAR(255),
+  @Role NVARCHAR(20)
+AS
+BEGIN
+  IF EXISTS (SELECT 1 FROM Users WHERE Email = @Email)
+  BEGIN
+    RAISERROR('Email already exists.', 16, 1);
+    RETURN;
+  END
+
+  INSERT INTO Users (FullName, Email, PasswordHash, Role)
+  VALUES (@FullName, @Email, @PasswordHash, @Role);
+END;
+
+
+--2. Login User (Validate Email & PasswordHash)
+CREATE PROCEDURE LoginUser
+  @Email NVARCHAR(100)
+AS
+BEGIN
+  SELECT UserID, FullName, Email, PasswordHash, Role
+  FROM Users
+  WHERE Email = @Email;
+END;
+
+
+
+
+--MENU MODULE
+--3. Add Menu Item (admin only)
+CREATE  PROCEDURE AddMenuItem
+  @Name NVARCHAR(100),
+  @Description NVARCHAR(255),
+  @Price DECIMAL(10,2),
+  @Category NVARCHAR(50),
+  @IsAvaiable Bit
+AS
+BEGIN
+SET NOCOUNT ON;
+  INSERT INTO MenuItems (Name, Description, Price, Category,IsAvailable)
+  VALUES (@Name, @Description, @Price, @Category,@IsAvaiable);
+  -- Return it as a result set
+    SELECT SCOPE_IDENTITY() AS ItemID;
+END;
+
+--4. Update Menu Item
+CREATE PROCEDURE UpdateMenuItem
+  @ItemID INT,
+  @Name NVARCHAR(100),
+  @Description NVARCHAR(255),
+  @Price DECIMAL(10,2),
+  @Category NVARCHAR(50),
+  @IsAvailable BIT
+AS
+BEGIN
+  UPDATE MenuItems
+  SET Name = @Name,
+      Description = @Description,
+      Price = @Price,
+      Category = @Category,
+      IsAvailable = @IsAvailable
+  WHERE ItemID = @ItemID;
+END;
+
+
+
+--5. Delete Menu Item
+CREATE PROCEDURE DeleteMenuItem
+  @ItemID INT
+AS
+BEGIN
+  DELETE FROM MenuItems WHERE ItemID = @ItemID;
+END;
+
+
+
+--6. View All Available Menu Items (for public menu view)
+CREATE PROCEDURE GetAvailableMenuItems
+AS
+BEGIN
+  SELECT * FROM MenuItems WHERE IsAvailable = 1;
+END;
+
+
+
+
+
+--ORDER MODULE
+7. Place New Order (initial step)
+CREATE PROCEDURE PlaceNewOrder
+  @UserID INT,
+  @TotalAmount DECIMAL(10,2),
+  @OrderID INT OUTPUT
+AS
+BEGIN
+  INSERT INTO Orders (UserID, OrderStatus, TotalAmount)
+  VALUES (@UserID, 'pending', @TotalAmount);
+
+  SET @OrderID = SCOPE_IDENTITY();
+END;
+
+
+--8. Add Items to Order
+CREATE PROCEDURE AddOrderItem
+  @OrderID INT,
+  @ItemID INT,
+  @Quantity INT,
+  @PriceAtPurchase DECIMAL(10,2)
+AS
+BEGIN
+  INSERT INTO OrderItems (OrderID, ItemID, Quantity, PriceAtPurchase)
+  VALUES (@OrderID, @ItemID, @Quantity, @PriceAtPurchase);
+END;
+
+
+
+--9. View User's Orders
+CREATE PROCEDURE GetUserOrders
+  @UserID INT
+AS
+BEGIN
+  SELECT o.OrderID, o.OrderStatus, o.OrderTime, o.TotalAmount
+  FROM Orders o
+  WHERE o.UserID = @UserID
+  ORDER BY o.OrderTime DESC;
+END;
+
+
+
+
+
+--DELIVERY MODULE
+--10. Update Delivery Status (admin or delivery person)
+CREATE PROCEDURE UpdateDeliveryStatus
+  @DeliveryID INT,
+  @Status NVARCHAR(20)
+AS
+BEGIN
+  UPDATE DeliveryDetails
+  SET DeliveryStatus = @Status
+  WHERE DeliveryID = @DeliveryID;
+END;
+
+
+CREATE PROCEDURE UpdateDeliveryAddress
+  @OrderID INT,
+  @NewAddress NVARCHAR(255)
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  UPDATE DeliveryDetails
+  SET DeliveryAddress = @NewAddress,
+DeliveryTime = DATEADD(MINUTE, 30, GETDATE())
+  WHERE OrderID = @OrderID;
+END;
+
+
+--11. View Delivery Info for a User's Order
+CREATE PROCEDURE GetDeliveryDetails
+  @OrderID INT
+AS
+BEGIN
+  SELECT * FROM DeliveryDetails
+  WHERE OrderID = @OrderID;
+END;
+
+
+
+
+--ADMIN UTILITIES
+--12. View All Orders (Admin Panel)
+CREATE PROCEDURE GetAllOrders
+AS
+BEGIN
+  SELECT o.OrderID, u.FullName, o.OrderStatus, o.OrderTime, o.TotalAmount
+  FROM Orders o
+  INNER JOIN Users u ON o.UserID = u.UserID
+  ORDER BY o.OrderTime DESC;
+END;
+
+
+--13. View Order Items (admin/customer view)
+CREATE PROCEDURE GetOrderItems
+  @OrderID INT
+AS
+BEGIN
+  SELECT oi.OrderItemID, mi.Name, oi.Quantity, oi.PriceAtPurchase
+  FROM OrderItems oi
+  INNER JOIN MenuItems mi ON oi.ItemID = mi.ItemID
+  WHERE oi.OrderID = @OrderID;
+END;
+ 
+
+
+CREATE PROCEDURE AddDeliveryDetails
+    @OrderID INT,
+    @DeliveryAddress NVARCHAR(255)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO DeliveryDetails (OrderID, DeliveryAddress, DeliveryTime, DeliveryStatus)
+    VALUES (@OrderID, @DeliveryAddress, GETDATE(), 'pending');
+END;
